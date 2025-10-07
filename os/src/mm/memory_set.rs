@@ -262,6 +262,109 @@ impl MemorySet {
             false
         }
     }
+
+    /// check vpn if covered
+    pub fn check_vpn_covered(&self, vpn: VirtPageNum) -> bool {
+        let mut flag = false;
+        
+        for i in 0..self.areas.len() {
+            let start = self.areas[i].vpn_range.get_start();
+            let end = self.areas[i].vpn_range.get_end();
+            
+            if vpn >= start && vpn < end {
+                flag = true;
+            }
+        }
+
+        return flag;
+    }
+
+    /// check vpn if readable
+    pub fn check_vpn_readable(&self, vpn: VirtPageNum) -> bool {
+        self.check_vpn_covered(vpn) && self.page_table.check_vpn_readable(vpn)
+    }
+
+    /// check vpn if writable
+    pub fn check_vpn_writable(&self, vpn: VirtPageNum) -> bool {
+        self.check_vpn_covered(vpn) && self.page_table.check_vpn_writable(vpn)
+    }
+
+    /// allocate free page 
+    pub fn alloc_free_page(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
+        self.page_table.map(vpn, ppn, flags);
+    }
+
+    /// deallocate free page
+    pub fn dealloc_free_page(&mut self, vpn: VirtPageNum) {
+       self.page_table.unmap(vpn); 
+    }
+    
+    /// map virtual pages
+    pub fn map_pages(&mut self, _start: VirtAddr, page_num: usize, _perm: MapPermission) {
+        for i in 0..page_num {
+            let _start = _start.0 + i * PAGE_SIZE;
+            self.map_one_page(_start.into(), _perm);
+        }
+    }
+
+    /// map one virtual page
+    pub fn map_one_page(&mut self, _start: VirtAddr, _perm: MapPermission) {
+        let _end: VirtAddr = (_start.0 + PAGE_SIZE).into();
+        println!("kernel: allocate one page: _start = {:#x}, _end = {:#x}", _start.0, _end.0);
+        self.push(
+            MapArea::new(_start, _end, MapType::Framed, _perm),
+            Some(&[0; PAGE_SIZE])
+        );
+
+        self.print_framed_pages();
+    }
+
+    /// unmap one virtual page
+    pub fn unmap_one_page(&mut self, vpn: VirtPageNum) {
+        for i in 0..self.areas.len() {
+            if self.areas[i].data_frames.contains_key(&vpn) {
+                self.areas[i].unmap_one(&mut self.page_table, vpn);
+            }
+        }
+
+        self.print_framed_pages();
+    }
+
+    /// check virtual page if mapped
+    pub fn check_page_mapped(&self, vpn: VirtPageNum) -> bool {
+        self.page_table.check_vpn_mapped(vpn)
+    }
+
+    /// write one byte to page
+    pub fn write_byte_to_page(&self, addr: VirtAddr, data: u8) {
+        self.page_table.write_byte_to_page(addr, data);
+    }
+
+    /// read one byte from page
+    pub fn read_byte_from_page(&self, addr: VirtAddr) -> isize {
+        self.page_table.read_byte_from_page(addr)
+    }
+
+    ///
+    pub fn print_framed_pages(&self) {
+        println!("----------------------PageTable-----------------------");
+
+        for i in 0..self.areas.len() {
+            let data_frames = self.areas[i].data_frames.iter().clone();
+            
+            if data_frames.len() == 0 {
+                continue;
+            }
+
+            for (key, val) in data_frames {
+                let pte_flag_bits = self.translate(*key).unwrap().flags().bits();
+                println!("{:#x} -> {:#x} perm: {:#x} pte_flags: {:#x}", key.0, val.ppn.0, self.areas[i].map_perm, pte_flag_bits);
+            }
+        }
+
+        println!("------------------------------------------------------");
+    }
+
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -299,6 +402,8 @@ impl MapArea {
                 self.data_frames.insert(vpn, frame);
             }
         }
+
+        // map_perm -> pte_flags
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         page_table.map(vpn, ppn, pte_flags);
     }
